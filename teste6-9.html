@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulação de Abastecimento de Diesel Interativa</title>
+    <style>
+
+        .container {
+                display: flex;
+                width: 100%;
+                height: 600px;
+                position: relative;
+        }
+
+        #map {
+            flex: 1;  /* Ocupa o espaço restante */
+            height: 100%;
+         }
+
+        .info-window {
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+        }
+
+        #inputForm {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+        }
+
+        #map {
+        height: 600px;
+        width: 80%; /* Reduzido para dar espaço ao painel */
+        float: right;
+    }
+    
+    #controlPanel {
+        width: 300px;  /* Largura fixa para o painel */
+        height: 100%;
+        padding: 15px;
+        background-color: #f5f5f5;
+        overflow-y: auto;
+        box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+    }
+    
+    .truck-info {
+        border: 1px solid #ddd;
+        margin-bottom: 15px;
+        padding: 15px;
+        border-radius: 5px;
+        background-color: white;
+    }
+    .truck-status {
+        font-weight: bold;
+        margin-top: 5px;
+    }
+
+    .fuel-gauge {
+        width: 100%;
+        height: 20px;
+        background-color: #ddd;
+        border-radius: 10px;
+        margin: 5px 0;
+    }
+
+    .fuel-level {
+        height: 100%;
+        background-color: #4CAF50;
+        border-radius: 10px;
+        transition: width 0.3s ease;
+    }
+    #inputForm {
+        position: absolute;
+        top: 10px;
+        left: 320px; /* Posicionado após o painel de controle */
+        background: white;
+        padding: 10px;
+        border-radius: 5px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        z-index: 1000;
+    }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div id="controlPanel"></div>
+        <div id="map"></div>
+    </div> 
+        <div id="inputForm" style="display: none;">
+            <h3>Novo Ponto de Abastecimento</h3>
+            <label for="priority">Prioridade (0-100):</label>
+            <input type="number" id="priority" min="0" max="100" required><br>
+            <label for="fuelNeeded">Combustível Necessário (litros):</label>
+            <input type="number" id="fuelNeeded" min="0" required><br>
+            <button onclick="addNewPoint()">Adicionar Ponto</button>
+            <button onclick="cancelNewPoint()">Cancelar</button>
+        </div>   
+    <script
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAS3JVM7FrCsbbYpPq985EyRJoIUHtyRZg&libraries=geometry"></script>
+    <script>
+
+        //alterar para aumeentar velocidade
+        const NUM_STEPS = 20;  //normal 50
+
+        //alterar para aumentar velocidade
+        const TIMEOUT = 10;  //normal 50
+
+        let truckStatuses = new Map(); // Armazena status dos caminhões
+
+        // Controle dos marcadores dos caminhões no mapa
+        let truckMarkers = new Map();
+        // key: id do caminhão
+        // value: objeto Marker do Google Maps
+
+        // Controle das animações ativas
+        let truckAnimations = new Map();
+        // key: id do caminhão
+        // value: { stop: boolean } - objeto para controlar a interrupção da animação
+
+
+        // Armazena as rotas atuais de cada caminhão
+        let currentRoutes = new Map();
+        // key: id do caminhão
+        // value: array de LatLng representando o caminho completo
+
+
+        // Armazena os marcadores dos pontos de entrega
+        let deliveryMarkers = new Map();
+        // key: string com coordenadas "lat,lng"
+        // value: objeto Marker do Google Maps
+
+
+        // Conjunto de pontos já visitados
+        let visitedPoints = new Set();
+        // Contém strings "lat,lng" dos pontos já abastecidos
+
+
+        // Configurações iniciais, pontos de entrega com suas prioridades
+        const origin2 = { lat: -20.8113, lng: -49.3758 }; // São José do Rio Preto
+        let deliveryPoints2 = [
+            { lat: -20.9113, lng: -49.4758, priority: 80, fuelNeeded: 15000 , wasSupplied: false },
+            { lat: -20.7113, lng: -49.2758, priority: 60, fuelNeeded: 10000 , wasSupplied: false},
+            { lat: -20.8613, lng: -49.5258, priority: 90, fuelNeeded: 20000 , wasSupplied: false},
+            { lat: -20.7613, lng: -49.3258, priority: 40, fuelNeeded: 5000 , wasSupplied: false},
+            { lat: -20.8613, lng: -49.2258, priority: 70, fuelNeeded: 12000 , wasSupplied: false},
+            { lat: -20.7813, lng: -49.4058, priority: 50, fuelNeeded: 8000 , wasSupplied: false},
+            { lat: -20.8313, lng: -49.3458, priority: 30, fuelNeeded: 3000 , wasSupplied: false},
+            { lat: -20.8913, lng: -49.3958, priority: 100, fuelNeeded: 25000 , wasSupplied: false}
+        ];
+
+        const origin = { lat: -22.4115, lng: -50.5745 }; // Paraguaçu Pta
+        let deliveryPoints = [
+            // Conjunto 1 - Rodovia SP-421 (Assis-Paraguaçu) e vicinais
+            { lat: -22.170485, lng: -50.356666, priority: 73, fuelNeeded: 4200, wasSupplied: false }, // SP-421
+            { lat: -22.145499, lng: -50.367349, priority: 88, fuelNeeded: 9800, wasSupplied: false }, // Estrada Municipal PAR-040
+            { lat: -22.173376, lng: -50.379879, priority: 45, fuelNeeded: 3500, wasSupplied: false }, // Acesso à Usina São Luiz
+            { lat: -22.182011, lng: -50.344053, priority: 67, fuelNeeded: 6700, wasSupplied: false }, // Estrada Paraguaçu-Lutécia
+            { lat: -22.138559, lng: -50.390653, priority: 95, fuelNeeded: 8500, wasSupplied: false }, // Vicinal PAR-446
+
+            // Conjunto 2 - Rodovia SP-483 (Paraguaçu-Borá)
+            { lat: -22.5234, lng: -50.5345, priority: 92, fuelNeeded: 9200, wasSupplied: false }, // SP-483
+            { lat: -22.5123, lng: -50.5234, priority: 54, fuelNeeded: 5600, wasSupplied: false }, // Acesso à Borá
+            { lat: -22.514385, lng: -50.501054, priority: 78, fuelNeeded: 7800, wasSupplied: false }, // Estrada Municipal BOR-010
+            { lat: -22.548535, lng: -50.504388, priority: 34, fuelNeeded: 2800, wasSupplied: false }, // Vicinal PAR-359
+            { lat: -22.549760, lng: -50.520901, priority: 86, fuelNeeded: 8900, wasSupplied: false }, // Estrada do Córrego do Barreiro
+
+            // Conjunto 3 - Rodovia SP-421 (Paraguaçu-Quatá)
+            { lat: -22.258681, lng: -50.611727, priority: 98, fuelNeeded: 9500, wasSupplied: false }, // SP-421
+            { lat: -22.270031, lng: -50.610736, priority: 65, fuelNeeded: 6200, wasSupplied: false }, // Acesso à Quatá
+            { lat: -22.247767, lng: -50.637107, priority: 82, fuelNeeded: 8100, wasSupplied: false }, // Estrada Municipal QUA-020
+            { lat: -22.240375, lng: -50.565287, priority: 43, fuelNeeded: 4100, wasSupplied: false }, // Vicinal PAR-253
+            { lat: -22.275171, lng: -50.613016, priority: 76, fuelNeeded: 7400, wasSupplied: false }, // Estrada do Córrego da Prata
+
+            // Conjunto 4 - Região de Lutécia (SP-284)
+            { lat: -22.359798, lng: -50.375852, priority: 89, fuelNeeded: 8800, wasSupplied: false }, // SP-284
+            { lat: -22.373434, lng: -50.334846, priority: 56, fuelNeeded: 5400, wasSupplied: false }, // Acesso à Lutécia
+            { lat: -22.370626, lng: -50.324367, priority: 94, fuelNeeded: 9100, wasSupplied: false }, // Estrada Municipal LUT-030
+            { lat: -22.367364, lng: -50.346680, priority: 67, fuelNeeded: 6800, wasSupplied: false }, // Vicinal LUT-155
+            { lat: -22.335421, lng: -50.345696, priority: 83, fuelNeeded: 7900, wasSupplied: false }  // Estrada do Rio Capivara
+        ];
+
+        //Dados dos caminhões
+        const trucks = [
+            { 
+                id: 1, 
+                color: 'red', 
+                maxTankFuel: 475,        // Combustível para rodar
+                currentTankFuel: 475,
+                maxDeliveryFuel: 50000,  // Combustível para abastecer postos
+                currentDeliveryFuel: 50000,
+                consumptionRate: 0.5     // litros por quilômetro para deslocamento
+            },
+            { 
+                id: 2, 
+                color: 'blue', 
+                maxTankFuel: 475,
+                currentTankFuel: 475,
+                maxDeliveryFuel: 50000,
+                currentDeliveryFuel: 50000,
+                consumptionRate: 0.5
+            },
+            { 
+                id: 3, 
+                color: 'green', 
+                maxTankFuel: 475,
+                currentTankFuel: 475,
+                maxDeliveryFuel: 50000,
+                currentDeliveryFuel: 50000,
+                consumptionRate: 0.5
+            }
+        ];
+
+        // Inicializar truckInfo no início
+        const truckInfo = new Map();
+        trucks.forEach(truck => {
+            truckInfo.set(truck.id, {
+                totalDistance: 0,
+                currentTankFuel: truck.maxTankFuel,
+                currentDeliveryFuel: truck.maxDeliveryFuel,
+                remainingRouteDistance: 0,  // Distância total restante
+                nextStopDistance: 0,        // Distância até próximo ponto
+                nextStopDistance: 0,
+                nextStopFuel: 0,
+                status: 'Em rota'
+            });
+        });
+
+        let map, directionsService;
+        let newPointMarker = null;
+        let directionsRenderers = [];
+
+        //Função para inicialização do mapa do Google Maps
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: origin,
+                zoom: 11
+            });
+
+            //Inicialização do serviço de direções
+            directionsService = new google.maps.DirectionsService();
+
+            // Adicionar marcador de origem
+            new google.maps.Marker({
+                position: origin,
+                map: map,
+                icon: 'http://maps.google.com/mapfiles/ms/icons/yellow-dot.png',
+                title: 'Origem (Depósito de Combustível)'
+            });
+
+            // Adicionar marcadores de pontos de abastecimento
+            addDeliveryPointMarkers();
+
+            // Adicionar evento de clique no mapa
+            map.addListener('click', (event) => {
+                if (newPointMarker) newPointMarker.setMap(null);
+                newPointMarker = new google.maps.Marker({
+                    position: event.latLng,
+                    map: map,
+                    icon: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png'
+                });
+                document.getElementById('inputForm').style.display = 'block';
+            });
+
+            //Inicialização das rotas
+            updateRoutes();
+        }
+
+        // Função para atualizar o painel de controle
+        function updateControlPanel() {
+            const panel = document.getElementById('controlPanel');
+            panel.innerHTML = '';
+
+            trucks.forEach(truck => {
+                const info = truckInfo.get(truck.id) || {
+                    totalDistance: 0,
+                    currentTankFuel: truck.maxTankFuel,
+                    currentDeliveryFuel: truck.maxDeliveryFuel,
+                    nextStopDistance: 0,
+                    nextStopFuel: 0,
+                    status: 'Em rota'
+                };
+
+                //LOg da quantiddade de combustivel de cada caminhão
+                // console.log(`Caminhão ${truck.id} - Combustível para abastecimento:`, {
+                //     atual: info.currentDeliveryFuel,
+                //     maximo: truck.maxDeliveryFuel,
+                //     porcentagem: ((info.currentDeliveryFuel / truck.maxDeliveryFuel) * 100).toFixed(2) + '%'
+                // });
+
+                const truckDiv = document.createElement('div');
+                truckDiv.className = 'truck-info';
+                truckDiv.style.borderColor = truck.color;
+
+                // Garante que os valores existem antes de usar toFixed
+                const tankFuelPercentage = ((info.currentTankFuel || 0) / truck.maxTankFuel) * 100;
+                const deliveryFuelPercentage = ((info.currentDeliveryFuel || 0) / truck.maxDeliveryFuel) * 100;
+                const currentTankFuel = info.currentTankFuel || 0;
+                const currentDeliveryFuel = info.currentDeliveryFuel || 0;
+                const nextStopDistance = info.nextStopDistance || 0;
+                const nextStopFuel = info.nextStopFuel || 0;
+                const totalDistance = info.totalDistance || 0;
+
+                truckDiv.innerHTML = `
+                    <h3 style="color: ${truck.color}">Caminhão ${truck.id}</h3>
+                    <p>Distância total restante: ${(info.remainingRouteDistance/1000).toFixed(2)} km</p>
+                    <p>Distância próxima parada: ${(info.nextStopDistance/1000).toFixed(2)} km</p>
+                    
+                    <p>Combustível do Caminhão:</p>
+                    <div class="fuel-gauge">
+                        <div class="fuel-level" style="width: ${tankFuelPercentage}%; background-color: ${truck.color}"></div>
+                    </div>
+                    <p>${currentTankFuel.toFixed(0)}/${truck.maxTankFuel} litros</p>
+                    
+                    <p>Combustível para Abastecimento:</p>
+                    <div class="fuel-gauge">
+                        <div class="fuel-level" style="width: ${deliveryFuelPercentage}%; background-color: ${truck.color}"></div>
+                    </div>
+                    <p>${currentDeliveryFuel.toFixed(0)}/${truck.maxDeliveryFuel} litros</p>
+                    
+                    <p>Combustível necessário: ${nextStopFuel.toFixed(0)} litros</p>
+                    <p class="truck-status">Status: ${info.status || 'Em rota'}</p>
+                `;
+
+                panel.appendChild(truckDiv);
+            });
+        }
+
+        //Função para atualizar a estrutura de informações no truckInfo
+        function updateTruckInfo(truck, info) {
+            truckInfo.set(truck.id, {
+                totalDistance: info.totalDistance || 0,
+                currentTankFuel: info.currentTankFuel || truck.maxTankFuel,
+                currentDeliveryFuel: info.currentDeliveryFuel || truck.maxDeliveryFuel,
+                nextStopDistance: info.nextStopDistance || 0,
+                nextStopFuel: info.nextStopFuel || 0,
+                status: info.status || 'Em rota'
+            });
+        }
+
+        // Função para gerenciamento dos pontos de entrega
+        function addDeliveryPointMarkers() {
+
+            //Itera sobre cada ponto de entrega
+            deliveryPoints.forEach((point, index) => {
+
+                //Criação do marcador
+                const marker = new google.maps.Marker({
+                    position: point,
+                    map: map,
+                    icon: 'http://maps.google.com/mapfiles/ms/icons/purple-dot.png',
+                    title: `Ponto de Abastecimento ${index + 1}`
+                });
+
+                // Armazenar o marcador no Map usando as coordenadas como chave
+                const pointKey = `${point.lat},${point.lng}`;
+                deliveryMarkers.set(pointKey, marker);
+                
+                //Criação da janela de informações do ponto de abastecimento
+                const infoWindow = new google.maps.InfoWindow({
+                    content: getInfoWindowContent(point, index)
+                });
+
+                //Configuração dos eventos do marcador (ponto de abastecimento)
+                marker.addListener('mouseover', () => infoWindow.open(map, marker));
+                marker.addListener('mouseout', () => infoWindow.close());
+            });
+        }
+
+        // Função para geração do conteúddo dos pontos de abastecimento
+        function getInfoWindowContent(point, index, isVisited = false) {
+
+            //Definição do status visual
+            const status = isVisited
+                ? '<span style="color: green;">Abastecido</span>'
+                : '<span style="color: purple;">Aguardando abastecimento</span>';
+
+                //Construção do HTML
+            return `
+        <div class="info-window">
+            <h3>Ponto de Abastecimento ${index + 1}</h3>
+            <p>Prioridade: ${point.priority}</p>
+            <p>Combustível necessário: ${point.fuelNeeded} litros</p>
+            <p>Status: ${status}</p>
+        </div>
+    `;
+        }
+
+        // Função para incluir o novo ponto no sistema de marcadores
+        async function addNewPoint() {
+
+            //Obtenção e validação dos dados
+            const priority = parseInt(document.getElementById('priority').value);
+            const fuelNeeded = parseInt(document.getElementById('fuelNeeded').value);
+
+            if (isNaN(priority) || isNaN(fuelNeeded) || priority < 0 || priority > 100 || fuelNeeded < 0) {
+                alert("Por favor, insira valores válidos.");
+                return;
+            }
+
+            //Criação do novo ponto
+            const newPoint = {
+                lat: newPointMarker.getPosition().lat(),
+                lng: newPointMarker.getPosition().lng(),
+                priority: priority,
+                fuelNeeded: fuelNeeded,
+                wasSupplied: false
+            };
+
+            //Adição do ponto ao array de pontos
+            deliveryPoints.push(newPoint);
+
+            //Limpeza do marcado temporario
+            newPointMarker.setMap(null);
+            newPointMarker = null;
+
+            //Criação do marcado definitivo
+            const pointKey = `${newPoint.lat},${newPoint.lng}`;
+            const marker = new google.maps.Marker({
+                position: newPoint,
+                map: map,
+                icon: 'http://maps.google.com/mapfiles/ms/icons/purple-dot.png',
+                title: `Ponto de Abastecimento ${deliveryPoints.length}`
+            });
+
+            //Registro do marcador
+            deliveryMarkers.set(pointKey, marker);
+
+            //Configuração da janela de informações
+            const infoWindow = new google.maps.InfoWindow({
+                content: getInfoWindowContent(newPoint, deliveryPoints.length - 1)
+            });
+
+            //Configuração dos eventos do marcador
+            marker.addListener('mouseover', () => infoWindow.open(map, marker));
+            marker.addListener('mouseout', () => infoWindow.close());
+
+            //Limpeza do formulário
+            document.getElementById('inputForm').style.display = 'none';
+            document.getElementById('priority').value = '';
+            document.getElementById('fuelNeeded').value = '';
+
+            //Atualização das rotas com os novos pontos
+            await updateRoutes();
+        }
+
+        //Função para a reinicialização dos pontos (útil para testes)
+        function resetVisitedPoints() {
+
+            //Limpa o conjunto de pontos visitados
+            visitedPoints.clear();
+
+            //restaura o estado visual dos marcadores
+            deliveryMarkers.forEach(marker => {
+                marker.setIcon('http://maps.google.com/mapfiles/ms/icons/purple-dot.png');
+            });
+        }
+        
+        //Função para cancelar um novo ponto
+        function cancelNewPoint() {
+
+            //remove o marcador temporario se existir
+            if (newPointMarker) {
+                newPointMarker.setMap(null);
+                newPointMarker = null;
+            }
+
+            //esconde o formulario de entrada
+            document.getElementById('inputForm').style.display = 'none';
+        }
+
+        // Função para atualização de rotas
+        async function updateRoutes() {
+
+            // Limpar rotas existentes
+            directionsRenderers.forEach(renderer => renderer.setMap(null));
+            directionsRenderers = [];
+
+            try {
+                // Filtrar apenas os pontos não abastecidos
+                const unvisitedPoints = deliveryPoints.filter(point => {
+                    const pointKey = `${point.lat},${point.lng}`;
+                    return !visitedPoints.has(pointKey);
+                });
+
+                //Log dos pontos ainda não abastecidos
+                console.log('Pontos não abastecidos:', unvisitedPoints.map(point => ({
+                    lat: point.lat,
+                    lng: point.lng,
+                    priority: point.priority,
+                    fuelNeeded: point.fuelNeeded
+                })));
+
+                //Veriica se o ponto de abastecimento foi concluído
+                if (unvisitedPoints.length === 0) {
+                    console.log('Todos os pontos foram abastecidos!');
+                    return;
+                }
+
+                // Ordenar pontos de entrega por prioridade
+                const sortedDeliveryPoints = [...unvisitedPoints].sort((a, b) => b.priority - a.priority);
+
+                // Distribuir pontos de entrega entre os caminhões
+                const truckRoutes = await distributeDeliveryPoints(sortedDeliveryPoints, trucks.length);
+
+                // Calcular e exibir rotas para cada caminhão
+                trucks.forEach((truck, index) => {
+                    if (truckRoutes[index] && truckRoutes[index].length > 0) {
+                        calculateAndDisplayRoute(truck, truckRoutes[index]);
+                    }
+                });
+            } catch (error) {
+                console.error('Erro ao atualizar rotas:', error);
+            }
+        }
+
+        // Função para verificar status do abastecimento
+        function checkDeliveryStatus() {
+
+            //contagem de pontos
+            const totalPoints = deliveryPoints.length;
+            const visitedCount = visitedPoints.size;
+
+            //verificação de conclusão
+            if (visitedCount === totalPoints) {
+                alert('Todos os pontos foram abastecidos com sucesso!');
+                // Opcional: Adicione aqui qualquer lógica adicional para quando todas as entregas forem concluídas
+            }
+        }
+
+        //Função para distribuição dos pontos entre os caminhões
+        async function distributeDeliveryPoints(points, numTrucks) {
+
+            //verificação inicial, se não tive pontos, retorna um array vazio
+            if (points.length === 0) return Array(numTrucks).fill([]);
+            
+            //prepara todos os pontos incluindo a origem
+            const allPoints = [origin, ...points];
+
+            // cria matriz de distâncias entre todos os pontos
+            const distanceMatrix = await calculateDistanceMatrix(allPoints);
+
+            // cria um array vazio para cada caminhão
+            const routes = Array(numTrucks).fill().map(() => []);
+
+            //faz um cópia dos pontos
+            const unassignedPoints = [...points];
+
+            // Ordenar pontos por prioridade, do maior para o menor
+            unassignedPoints.sort((a, b) => b.priority - a.priority);
+
+            // Função para calcular o custo total de uma rota
+            function calculateRouteCost(route) {
+                let totalCost = 0;
+                for (let i = 0; i < route.length - 1; i++) {
+                    const pointIndex1 = allPoints.findIndex(p =>
+                        p.lat === route[i].lat && p.lng === route[i].lng);
+                    const pointIndex2 = allPoints.findIndex(p =>
+                        p.lat === route[i + 1].lat && p.lng === route[i + 1].lng);
+                    //soma a distancia entre os pontos
+                    totalCost += distanceMatrix[pointIndex1][pointIndex2];
+                }
+                return totalCost;
+            }
+
+            // Função para verificar se uma rota é viável em termos de combustível
+            function isRouteFeasible(route, maxFuel) {
+                let remainingFuel = maxFuel;
+                for (const point of route) {
+                    if (point === origin) {
+                        remainingFuel = maxFuel;
+                    } else {
+                        //verefica se tem combustivel suficiente para a próxima entrega
+                        if (remainingFuel < point.fuelNeeded) {
+                            return false;
+                        }
+                        remainingFuel -= point.fuelNeeded;
+                    }
+                }
+                return true;
+            }
+
+            // Distribuir pontos de alta prioridade primeiro
+            for (const point of unassignedPoints) {
+                let bestTruckIndex = 0;
+                let bestCost = Infinity;
+
+                for (let i = 0; i < numTrucks; i++) {
+                    const currentRoute = routes[i];
+                    // Tentar inserir o ponto em diferentes posições da rota
+                    for (let j = 0; j <= currentRoute.length; j++) {
+                        const newRoute = [
+                            ...currentRoute.slice(0, j),
+                            point,
+                            ...currentRoute.slice(j)
+                        ];
+
+                        // Adicionar origem no início e fim da rota para cálculo
+                        const completeRoute = [origin, ...newRoute, origin];
+
+                        // Calcular custo da nova rota
+                        const routeCost = calculateRouteCost(completeRoute);
+
+                        // Verificar se a rota é viável em termos de combustível
+                        if (routeCost < bestCost && isRouteFeasible(completeRoute, trucks[i].maxFuel)) {
+                            bestCost = routeCost;
+                            bestTruckIndex = i;
+                        }
+                    }
+                }
+
+                // Inserir o ponto na melhor posição encontrada
+                routes[bestTruckIndex].push(point);
+            }
+
+            // Otimizar cada rota individualmente usando a API do Google Routes
+            const optimizedRoutes = await Promise.all(routes.map(async route => {
+                if (route.length === 0) return [];
+
+                try {
+                    const request = {
+                        origin: origin,
+                        destination: origin,
+                        waypoints: route.map(point => ({
+                            location: new google.maps.LatLng(point.lat, point.lng),
+                            stopover: true
+                        })),
+                        optimizeWaypoints: true,
+                        travelMode: 'DRIVING'
+                    };
+
+                    const result = await new Promise((resolve, reject) => {
+                        directionsService.route(request, (response, status) => {
+                            if (status === 'OK') {
+                                resolve(response);
+                            } else {
+                                reject(status);
+                            }
+                        });
+                    });
+
+                    // Extrair a sequência otimizada dos pontos
+                    const waypointOrder = result.routes[0].waypoint_order;
+                    return waypointOrder.map(index => route[index]);
+                } catch (error) {
+                    console.error('Erro ao otimizar rota:', error);
+                    return route; // Retornar rota original em caso de erro
+                }
+            }));
+
+            return optimizedRoutes;
+        }
+        
+        //Função para o cálculo da matriz de distancias Google (adicionei o google no final do método, nome correto calculateDistanceMatrix)
+        async function calculateDistanceMatrixGoogle(points) {
+
+            // tamanho máximo de cada grupo (considerando o limite gratuito)
+            const MAX_SIZE = 10; // Usando um valor conservador para garantir
+            const chunks = [];
+
+            // dividir os pontos em grupos menores
+            for (let i = 0; i < points.length; i += MAX_SIZE) {
+                chunks.push(points.slice(i, i + MAX_SIZE));
+            }
+
+            // matriz para armazenar os resultados
+            const finalMatrix = Array(points.length).fill().map(() =>
+                Array(points.length).fill(0)
+            );
+
+            // Processar cada chunk
+            for (let i = 0; i < chunks.length; i++) {
+                for (let j = 0; j < chunks.length; j++) {
+                    const origins = chunks[i];
+                    const destinations = chunks[j];
+
+                    try {
+                        const partialMatrix = await getDistanceMatrixChunk(origins, destinations);
+
+                        // Preencher a matriz final com os resultados parciais
+                        for (let r = 0; r < origins.length; r++) {
+                            for (let c = 0; c < destinations.length; c++) {
+                                const finalRow = i * MAX_SIZE + r;
+                                const finalCol = j * MAX_SIZE + c;
+                                if (finalRow < points.length && finalCol < points.length) {
+                                    finalMatrix[finalRow][finalCol] = partialMatrix[r][c];
+                                }
+                            }
+                        }
+
+                        // delay para evitar exceder o rate limit
+                        await new Promise(resolve => setTimeout(resolve, 100));
+
+                    } catch (error) {
+                        console.error('Erro ao calcular matriz de distância:', error);
+                        // Em caso de erro, usar uma estimativa baseada na distância linear
+                        for (let r = 0; r < origins.length; r++) {
+                            for (let c = 0; c < destinations.length; c++) {
+                                const finalRow = i * MAX_SIZE + r;
+                                const finalCol = j * MAX_SIZE + c;
+                                if (finalRow < points.length && finalCol < points.length) {
+                                    finalMatrix[finalRow][finalCol] = calculateLinearDistance(
+                                        points[finalRow],
+                                        points[finalCol]
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return finalMatrix;
+        }
+
+        //Função para o cálculo da matriz de distancias utilizando o OSRM
+        async function calculateDistanceMatrix(points) {
+            // Configuração do servidor OSRM
+            const OSRM_SERVER = 'http://router.project-osrm.org';
+            const MAX_SIZE = 10; // Limite de pontos por requisição
+            const chunks = [];
+
+            // Divide os pontos em grupos menores
+            for (let i = 0; i < points.length; i += MAX_SIZE) {
+                chunks.push(points.slice(i, i + MAX_SIZE));
+            }
+
+            // Matriz para armazenar os resultados
+            const finalMatrix = Array(points.length).fill().map(() =>
+                Array(points.length).fill(0)
+            );
+
+            // Função auxiliar para formatar as coordenadas para o OSRM
+            const formatCoordinates = (points) => {
+                return points.map(point => `${point.lng},${point.lat}`).join(';');
+            };
+
+            // Função para obter a matriz de distância de um chunk usando OSRM
+            async function getOSRMDistanceMatrix(origins, destinations) {
+                const sourceCoords = formatCoordinates(origins);
+                const destCoords = formatCoordinates(destinations);
+
+                try {
+                    const url = `${OSRM_SERVER}/table/v1/driving/${sourceCoords};${destCoords}?sources=${Array.from({ length: origins.length }, (_, i) => i).join(';')}&destinations=${Array.from({ length: destinations.length }, (_, i) => origins.length + i).join(';')}`;
+
+                    const response = await fetch(url);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    if (data.code !== 'Ok') {
+                        throw new Error('OSRM response not OK');
+                    }
+
+                    // Converte os resultados de metros para quilômetros
+                    return data.durations.slice(0, origins.length).map(row =>
+                        row.slice(0, destinations.length).map(value => value / 1000)
+                    );
+
+                } catch (error) {
+                    console.error('Erro na requisição OSRM:', error);
+                    throw error;
+                }
+            }
+
+            // Função para calcular distância linear (fallback)
+            function calculateLinearDistance(point1, point2) {
+                const R = 6371; // Raio da Terra em km
+                const dLat = (point2.lat - point1.lat) * Math.PI / 180;
+                const dLon = (point2.lng - point1.lng) * Math.PI / 180;
+                const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                        Math.cos(point1.lat * Math.PI / 180) * Math.cos(point2.lat * Math.PI / 180) *
+                        Math.sin(dLon/2) * Math.sin(dLon/2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                return R * c;
+            }
+
+            // Processa cada chunk
+            for (let i = 0; i < chunks.length; i++) {
+                for (let j = 0; j < chunks.length; j++) {
+                    const origins = chunks[i];
+                    const destinations = chunks[j];
+
+                    try {
+                        const partialMatrix = await getOSRMDistanceMatrix(origins, destinations);
+
+                        // Preenche a matriz final com os resultados parciais
+                        for (let r = 0; r < origins.length; r++) {
+                            for (let c = 0; c < destinations.length; c++) {
+                                const finalRow = i * MAX_SIZE + r;
+                                const finalCol = j * MAX_SIZE + c;
+                                if (finalRow < points.length && finalCol < points.length) {
+                                    finalMatrix[finalRow][finalCol] = partialMatrix[r][c];
+                                }
+                            }
+                        }
+
+                        // Delay para evitar sobrecarga do servidor
+                        await new Promise(resolve => setTimeout(resolve, 200));
+
+                    } catch (error) {
+                        console.warn('Usando cálculo de distância linear como fallback:', error);
+                        // Em caso de erro, usa distância linear como fallback
+                        for (let r = 0; r < origins.length; r++) {
+                            for (let c = 0; c < destinations.length; c++) {
+                                const finalRow = i * MAX_SIZE + r;
+                                const finalCol = j * MAX_SIZE + c;
+                                if (finalRow < points.length && finalCol < points.length) {
+                                    finalMatrix[finalRow][finalCol] = calculateLinearDistance(
+                                        points[finalRow],
+                                        points[finalCol]
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return finalMatrix;
+        }
+
+        //Função para o cálculo das distâncias utilizando o Google Maps
+        function getDistanceMatrixChunk(origins, destinations) {
+            return new Promise((resolve, reject) => {
+                const service = new google.maps.DistanceMatrixService();
+
+                service.getDistanceMatrix({
+                    //configuração da requisição
+                    origins: origins.map(p => new google.maps.LatLng(p.lat, p.lng)),
+                    destinations: destinations.map(p => new google.maps.LatLng(p.lat, p.lng)),
+                    travelMode: 'DRIVING'
+                }, (response, status) => {
+                    //tratamento da resposta
+                    if (status === 'OK') {
+                        const matrix = response.rows.map(row =>
+                            row.elements.map(element =>
+                                element.status === 'OK' ? element.distance.value : 0
+                            )
+                        );
+                        resolve(matrix);
+                    } else {
+                        reject(status);
+                    }
+                });
+            });
+        }
+
+        //Função para o cálculo e exibição das rotas
+        function calculateAndDisplayRoute(truck, waypoints) {
+
+            // Obter a posição atual do caminhão
+            let startPoint = origin;
+
+            //tenta obter o marcador existente do caminhão pelo seu ID
+            const existingMarker = truckMarkers.get(truck.id);
+
+            // Parar animação atual se existir
+            if (truckAnimations.has(truck.id)) {
+                truckAnimations.get(truck.id).stop = true;
+            }
+
+            //se existe um marcador para este caminhão, usa sua posição atual como ponto de inicio
+            if (existingMarker) {
+                const pos = existingMarker.getPosition();
+                startPoint = { lat: pos.lat(), lng: pos.lng() };
+            }
+
+            // Limpar rotas anteriores deste caminhão
+            directionsRenderers = directionsRenderers.filter(renderer => {
+                if (renderer.truckId === truck.id) {
+                    renderer.setMap(null);
+                    return false;
+                }
+                return true;
+            });
+
+            //se não existe pontos de parada, encerra a função
+            if (!waypoints || waypoints.length === 0) return;
+
+            // cria a rota da posição atual do caminhão
+            let currentRoute = [startPoint, ...waypoints];
+
+            //LOg dos DI dos caminhões e seus próximos pontos
+            console.log(`Caminhão ${truck.id} - Próximos pontos:`, waypoints.map(point => ({
+                lat: point.lat,
+                lng: point.lng,
+                priority: point.priority,
+                fuelNeeded: point.fuelNeeded
+            })));
+
+            // addiciona retorno à origem se não estiver no meio de uma rota, rota existente
+            if (!existingMarker) {
+                currentRoute.push(origin);
+            }
+            //inicializa o arrays e variaveis para controle de segmentos e combustível
+            let segments = [];
+            let currentSegment = [currentRoute[0]];
+            let remainingFuel = truck.maxFuel;
+
+            //itera sobre todos os pontosda rota para criar segmentos baseados no combustivel
+            for (let i = 1; i < currentRoute.length; i++) {
+                const point = currentRoute[i];
+                if (point === origin) {
+                    //se chegou na origem, reabastece
+                    remainingFuel = truck.maxFuel;
+                } else {
+                    //verifica se tem combustivel suficiente para o próximo ponto
+                    if (remainingFuel < point.fuelNeeded) {
+                        segments.push(currentSegment); //salva o segmento atual
+                        currentSegment = [origin]; //inicia novo segmento na origem
+                        remainingFuel = truck.maxFuel; //reabastece
+                    }
+                    remainingFuel -= point.fuelNeeded; //deduz combustível necessario
+                }
+                currentSegment.push(point);  //adiciona ponto ao segmento atual
+            }
+            segments.push(currentSegment);  //adiciona ultimo segmento
+
+            // array para armazenar todas as promises de direções (calcular as rotas de cada segmento)
+            const directionsPromises = segments.map(segment => {
+                return new Promise((resolve, reject) => {
+                    //configura requisição para API do Google Maps
+                    const request = {
+                        origin: segment[0],  //primeiro ponto do segmento
+                        destination: segment[segment.length - 1],  //ultimo ponto do segmento
+                        waypoints: segment.slice(1, -1).map(point => ({
+                            location: point,
+                            stopover: true
+                        })),
+                        optimizeWaypoints: true,  //otimiza ordem dos pontos
+                        travelMode: 'DRIVING'  //modo de viagem como parametro para a API
+                    };
+
+                    //faz a requisição a API do google maps
+                    directionsService.route(request, (result, status) => {
+                        if (status === 'OK') {
+
+                            //cria renderer para mostrar rota no mapa
+                            const renderer = new google.maps.DirectionsRenderer({
+                                map: map,
+                                suppressMarkers: true,  //não mostra marcadores padrão
+                                polylineOptions: {
+                                    strokeColor: truck.color,  //cor especifíca do caminhão
+                                    strokeWeight: 4 //espessura da linha
+                                }
+                            });
+                            renderer.truckId = truck.id;  //associa rendereer ao caminhão
+                            renderer.setDirections(result); //mostra rota no mapa
+                            directionsRenderers.push(renderer); //guarda referencia do renderer
+                            resolve(result.routes[0].overview_path); //retorna o caminho calculado
+                        } else {
+                            reject(status);
+                        }
+                    });
+                });
+            });
+
+            // Aguardar todas as direções serem calculadas antes de animar (processa todas as promessas de direções)
+            Promise.all(directionsPromises)
+                .then(pathsArrays => {
+                    // Combina todos os caminhos em um único array
+                    const completePath = [].concat(...pathsArrays);
+
+                    // Calcula a distância total usando o caminho completo
+                    let totalDistance = 0;
+                    for (let i = 0; i < completePath.length - 1; i++) {
+                        totalDistance += google.maps.geometry.spherical.computeDistanceBetween(
+                            completePath[i],
+                            completePath[i + 1]
+                        );
+                    }
+
+                    // Inicializa ou atualiza as informações do caminhão
+                    truckInfo.set(truck.id, {
+                        totalDistance: totalDistance,
+                        currentTankFuel: truck.maxTankFuel,
+                        currentDeliveryFuel: truck.maxDeliveryFuel,
+                        nextStopDistance: 0,
+                        nextStopFuel: 0,
+                        status: 'Em rota'
+                    });
+
+                    updateControlPanel();
+                    animateTruck(truck, completePath);
+                })
+                .catch(error => {
+                    console.error('Erro ao calcular rotas:', error);
+                });
+        }
+
+        //Função para animação dos caminhões
+        function animateTruck(truck, path) {
+
+            // para qualquer animação existente deste caminhão antes de iniciar uma nova
+            if (truckAnimations.has(truck.id)) {
+                truckAnimations.get(truck.id).stop = true;
+            }
+
+            // configuração do ícone do caminhão (seta na direção do movimento)
+            const truckIcon = {
+                path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                scale: 5,
+                fillColor: truck.color,
+                fillOpacity: 1,
+                strokeWeight: 1,
+                rotation: 0
+            };
+
+            // verifica se já existe um marcador para este caminhão ou precisa criar um novo
+            let marker = truckMarkers.get(truck.id);
+
+            // define posição inicial (usa posição atual se existir, senão usa início do caminho)
+            const startPosition = marker ? marker.getPosition() : path[0];
+
+            //se não existe marcador, cria um novo
+            if (!marker) {
+                marker = new google.maps.Marker({
+                    position: startPosition,
+                    map: map,
+                    icon: truckIcon,
+                    title: `Caminhão ${truck.id}`
+                });
+                truckMarkers.set(truck.id, marker);
+            }
+
+            //cria o objeto de controle da animação
+            const animation = { stop: false };
+            truckAnimations.set(truck.id, animation);
+
+            //indice atual no caminho e número de passos para interpolação
+            let currentIndex = 0;
+            const numSteps = NUM_STEPS; //qtde de passos entre cada ponto do caminho
+
+            //Função principal de animação
+            function animate() {
+
+                //se a animação foi marcada para parar, interrompe
+                if (animation.stop) {
+                    return;
+                }
+
+                //obtém pontos atual e próximo do caminho
+                const start = path[currentIndex];
+                const end = path[currentIndex + 1];
+
+                //se não há mais pontos, reinicia do início
+                if (!start || !end) {
+                    // Ao invés de recursão imediata, usar setTimeout
+                    setTimeout(() => {
+                        currentIndex = 0;
+                        const newStart = path[currentIndex];
+                        const newEnd = path[currentIndex + 1];
+                        if (newStart && newEnd) {
+                            animate();
+                        }
+                    }, 1000); // Espera 1 segundo antes de reiniciar
+                    return;
+                }
+
+                // Verificar pontos de abastecimento próximos (verifica se está próximo a algum ponto de entrega)
+                let pointWasVisited = false;
+                deliveryPoints.forEach(point => {
+                    const pointKey = `${point.lat},${point.lng}`;
+                    const deliveryMarker = deliveryMarkers.get(pointKey);
+
+                    //verifica apenas pontos não visitados
+                    
+                    if (deliveryMarker && !visitedPoints.has(pointKey)) {
+                        const pointLatLng = new google.maps.LatLng(point.lat, point.lng);
+                        const truckLatLng = new google.maps.LatLng(start.lat(), start.lng());
+                       
+                        //se o caminhão está a menos de 50 metros do ponto
+                        if (google.maps.geometry.spherical.computeDistanceBetween(pointLatLng, truckLatLng) < 50) {
+                          
+                            //marca o ponto como visitado
+                            visitedPoints.add(pointKey);
+
+                            //muda o ícone para verde (abastecido)
+                            deliveryMarker.setIcon('http://maps.google.com/mapfiles/ms/icons/green-dot.png');
+
+                            //atualiza a janela de informações do ponto
+                            const infoWindow = new google.maps.InfoWindow({
+                                content: getInfoWindowContent(point, deliveryPoints.indexOf(point), true)
+                            });
+
+                            //configura eventos do marcador
+                            deliveryMarker.addListener('mouseover', () => infoWindow.open(map, deliveryMarker));
+                            deliveryMarker.addListener('mouseout', () => infoWindow.close());
+                            
+                            pointWasVisited = true;
+                            
+                        }
+                    }
+                });
+
+                //se visitou um ponto, verifica o status e atualiza rotas se necessário
+               
+                if (pointWasVisited) {
+                    checkDeliveryStatus();
+
+                    //veriica se ainda existem pontos não visitados
+                    const remainingPoints = deliveryPoints.filter(point => {
+                        const pointKey = `${point.lat},${point.lng}`;
+                        return !visitedPoints.has(pointKey);
+                    });
+
+                    //se ainda há pontos, recalcula rotas após 1 segundo
+                    // if (remainingPoints.length > 0) {
+                    //     setTimeout(() => updateRoutes(), 1000);
+                    //     return;
+                    // }
+                }
+
+                const info = truckInfo.get(truck.id);
+                if (info) {
+
+                    // Calcula distância total restante
+                    let remainingRouteDistance = 0;
+                    for (let i = currentIndex; i < path.length - 1; i++) {
+                        remainingRouteDistance += google.maps.geometry.spherical.computeDistanceBetween(
+                            path[i],
+                            path[i + 1]
+                        );
+                    }
+
+                   // Abordagem 1: Calcular distância usando a rota real até o próximo ponto
+                   let nextStopDistance = 0;
+                   let nextPointFound = false;
+
+                    // Primeiro, encontrar o próximo ponto não visitado que está na rota
+                    const nextUnvisitedPoint = deliveryPoints.find(point => {
+                        const pointKey = `${point.lat},${point.lng}`;
+                        if (visitedPoints.has(pointKey)) return false;
+
+                        // Verificar se este ponto está em algum lugar da rota atual
+                        for (let i = currentIndex; i < path.length; i++) {
+                            const pathPoint = path[i];
+                            const distance = google.maps.geometry.spherical.computeDistanceBetween(
+                                new google.maps.LatLng(point.lat, point.lng),
+                                pathPoint
+                            );
+                            if (distance < 50) return true;
+                        }
+                        return false;
+                    });
+
+                    // Se encontrou um ponto não visitado na rota, calcular a distância até ele
+                    if (nextUnvisitedPoint) {
+                        for (let i = currentIndex; i < path.length; i++) {
+                            // Adicionar distância do segmento atual
+                            if (i < path.length - 1) {
+                                nextStopDistance += google.maps.geometry.spherical.computeDistanceBetween(
+                                    path[i],
+                                    path[i + 1]
+                                );
+                            }
+
+                            // Verificar se chegamos ao ponto
+                            const distance = google.maps.geometry.spherical.computeDistanceBetween(
+                                new google.maps.LatLng(nextUnvisitedPoint.lat, nextUnvisitedPoint.lng),
+                                path[i]
+                            );
+                            if (distance < 50) {
+                                nextPointFound = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Adicionar logs para debug
+                    console.log(`Caminhão ${truck.id} - Status:`, {
+                        posicaoAtual: currentIndex,
+                        distanciaTotal: remainingRouteDistance,
+                        distanciaProximoPonto: nextStopDistance,
+                        proximoPonto: nextUnvisitedPoint,
+                        encontrouProximo: nextPointFound
+                    });
+
+                    // Calcula distância do movimento atual
+                    const currentDistance = google.maps.geometry.spherical.computeDistanceBetween(start, end);
+                    
+                    // Calcula consumo do tanque baseado na distância percorrida
+                    const fuelConsumed = (currentDistance / 1000) * truck.consumptionRate;
+
+                    // Atualiza informações
+                    info.remainingRouteDistance = remainingRouteDistance;
+                    info.nextStopDistance = nextStopDistance;
+                    info.currentTankFuel = Math.max(0, info.currentTankFuel - fuelConsumed);
+                    info.nextStopFuel = (nextStopDistance / 1000) * truck.consumptionRate;
+
+                    // Se estiver abastecendo um ponto
+                    
+                    if (pointWasVisited) {
+                        const point = deliveryPoints.find(p => {
+                            const pointKey = `${p.lat},${p.lng}`;
+                            return visitedPoints.has(pointKey) && !p.wasSupplied &&
+                                google.maps.geometry.spherical.computeDistanceBetween(
+                                    new google.maps.LatLng(p.lat, p.lng),
+                                    new google.maps.LatLng(start.lat(), start.lng())
+                                ) < 50;
+                        });
+                        
+                        
+                        if (point && !point.wasSupplied) {
+                            const info = truckInfo.get(truck.id);
+                            info.status = 'Abastecendo ponto';
+                            
+                            console.log(info.currentDeliveryFuel, point.fuelNeeded)
+                            if (info.currentDeliveryFuel >= point.fuelNeeded) {
+
+                                // Atualizar o combustível imediatamente
+                                info.currentDeliveryFuel -= point.fuelNeeded;
+                                point.wasSupplied = true;
+                                
+                                // Atualizar o status após o delay
+                                setTimeout(() => {
+
+                                    const truckIndex = trucks.findIndex(t => t.id === truck.id);
+                                    if (truckIndex !== -1) {
+                                        trucks[truckIndex].currentDeliveryFuel = info.currentDeliveryFuel;
+                                    }
+
+                                    info.status = 'Em rota';
+                                    updateControlPanel();
+                                    
+                                    // Log do abastecimento
+                                    console.log(`Caminhão ${truck.id} abasteceu ponto:`, {
+                                        combustivelGasto: point.fuelNeeded,
+                                        combustivelRestante: info.currentDeliveryFuel,
+                                        pontoAbastecido: point
+                                    });
+                                    
+                                    // Atualizar interface
+                                    updateControlPanel();
+                                }, 1000);
+                            } else {
+                                info.status = 'Sem combustível para abastecer ponto';
+                                setTimeout(() => {
+                                    info.status = 'Retornando para reabastecer';
+                                    updateControlPanel();
+                                }, 1000);
+                            }
+                        }
+                    }
+                    
+                    // Se está na origem, reabastecer ambos os tanques
+                    const originDistance = google.maps.geometry.spherical.computeDistanceBetween(
+                        new google.maps.LatLng(start.lat(), start.lng()),
+                        new google.maps.LatLng(origin.lat, origin.lng)
+                    );
+                    
+                    if (originDistance < 50) {
+                        info.status = 'Reabastecendo na origem';
+                        setTimeout(() => {
+                            // Reabastece tanto o tanque de combustível quanto o tanque de abastecimento
+                            info.currentTankFuel = truck.maxTankFuel;         // Repõe combustível para locomoção (475 litros)
+                            info.currentDeliveryFuel = truck.maxDeliveryFuel; // Repõe combustível para abastecimento (50000 litros)
+                            info.status = 'Em rota';
+                            updateControlPanel();
+                        }, 1000);
+                    }
+
+                    // Atualiza status baseado no combustível do tanque
+                    if (info.currentTankFuel < info.nextStopFuel) {
+                        info.status = 'Retornando para abastecer';
+                    } else if (info.status !== 'Abastecendo ponto' && info.status !== 'Reabastecendo na origem') {
+                        info.status = 'Em rota';
+                    }
+
+                    updateControlPanel();
+                }
+
+                //cria pontos intermediários para movimento suave
+                const interpolatedPoints = [];
+                for (let i = 0; i <= numSteps; i++) {
+                    interpolatedPoints.push(
+                        google.maps.geometry.spherical.interpolate(start, end, i / numSteps)
+                    );
+                }
+
+                //serve para mover o marcador entre pontos interpolados
+                let step = 0;
+                function moveMarker() {
+
+                    //verifica se deve parar ou passou do último ponto
+                    if (animation.stop || step >= interpolatedPoints.length) {
+                        if (step >= interpolatedPoints.length) {
+                            currentIndex++;
+                            animate();
+                        }
+                        return;
+                    }
+                    
+                    //move o marcador para a nova posição
+                    const newPosition = interpolatedPoints[step];
+                    marker.setPosition(newPosition);
+
+                    //atualiza a rotaçao do icone para apontar na direção do movimento
+                    if (step > 0) {
+                        const heading = google.maps.geometry.spherical.computeHeading(
+                            interpolatedPoints[step - 1],
+                            newPosition
+                        );
+                        truckIcon.rotation = heading;
+                        marker.setIcon(truckIcon);
+                    }
+
+                    step++;
+
+                    //agenda o próximo movimento após 50ms
+                    setTimeout(moveMarker, TIMEOUT);
+                }
+
+                moveMarker();
+            }
+
+            //inicia a animação
+            animate();
+        }
+
+        google.maps.event.addDomListener(window, 'load', initMap);
+    </script>
+</body>
+
+</html>
